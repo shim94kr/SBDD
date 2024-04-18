@@ -1,6 +1,6 @@
 import torch
 from functools import partial
-from util.network import ResMLP, DhariwalUNet
+from util.network import ResMLP, DhariwalUNet, EDMPrecond
 from util.vision_transformer import VisionTransformer
 
 
@@ -27,10 +27,12 @@ class BaseModel(torch.nn.Module):
         self.noiser = noiser
         self.rank = rank
 
-        if self.args.network == 'mlp':
+        if self.args.network == 'edm-vp':
+            self.network = EDMPrecond(img_resolution=32, img_channels=3, label_dim=10, use_fp16=False,
+                                      model_type='SongUNet', channel_mult=[2,2,2])
+        elif self.args.network == 'mlp':
             self.network = ResMLP(dim_in=2, dim_out=2, dim_hidden=128, num_layers=5, n_cond=self.noiser.training_timesteps)
         else:
-            
             img_resolution = 32
             if "-512" in args.dataset:
                 img_resolution = 64

@@ -1,10 +1,11 @@
-import torch, os, tqdm, math
+import torch, os, tqdm, math, pickle
 from util.dataset import create_data
 from util.noiser import create_noiser
 from util.model import create_model
 from util.logger import Logger
 from util.visualize import InferenceResultVisualizer, TrajectoryVisualizer
-
+from util.misc import copy_params_and_buffers
+import util.dnnlib as dnnlib
 
 class Runner():
     def __init__(self, args):
@@ -143,6 +144,10 @@ class Runner():
                 print(f'Skipping ep{epoch} and evaluate.')
                 self.evaluate(epoch, 0, last=True)
                 continue
+
+            if epoch > 0 and epoch % 2 == 0:
+                self.noiser.gammas *= 0.5
+
             self.noiser.train()
             if self.dsb:
                 self.cnt = self.cache_size
@@ -283,7 +288,11 @@ class Runner():
                 if "optimizer" in ckpt:
                     self.optimizer.load_state_dict(ckpt['optimizer'])
         else:
-            if self.args.backward_ckpt is not None:
+            if self.args.backward_ckpt is not None and self.args.backward_ckpt.endswith('.pkl'):
+                with dnnlib.open_url(self.args.backward_ckpt, verbose=(self.rank == 0)) as f:
+                    data = pickle.load(f)
+                copy_params_and_buffers(src_module=data['ema'], dst_module=self.backward_model, require_all=False)
+            elif self.args.backward_ckpt is not None:
                 ckpt = torch.load(self.args.backward_ckpt, map_location='cpu')
                 self.backward_model.load_state_dict(match_ckpt(ckpt['model']), strict=False)
             if self.args.forward_ckpt is not None:

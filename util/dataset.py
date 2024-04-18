@@ -2,9 +2,9 @@ import torch, math, numpy as np
 from sklearn import datasets
 from glob import glob
 from PIL import Image
+import torchvision
 from torchvision import transforms
 from diffusers import AutoencoderKL
-
 
 class BaseDataset(torch.utils.data.Dataset):
     def __init__(self, size=10000, **kwargs):
@@ -15,7 +15,6 @@ class BaseDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, idx):
         return self.data[idx]
-
 
 class CheckerboardDataset(BaseDataset):
     def __init__(self, *args, grid_size=4, **kwargs):
@@ -158,7 +157,7 @@ class DSBDataset(torch.utils.data.Dataset):
             dataset *= 0.1
             init_sample = torch.from_numpy(dataset)
 
-        if data == '6gaussians':
+        if data == '6gaussians' or data == '6points':
             scale = 7.
             centers = [(0, 1), (0, -1), (np.sqrt(3) / 2., 1. / 2),
                     (np.sqrt(3) / 2., -1. / 2), (-np.sqrt(3) / 2.,
@@ -171,7 +170,22 @@ class DSBDataset(torch.utils.data.Dataset):
             point += center
             dataset = point
             dataset *= 0.1
+
+            if data == '6points':
+                # random sample from 6 gaussians
+                #idx = np.random.randint(npar, size=6)
+                centers = [(0, 1), (0, -1), (np.sqrt(3) / 2., 1. / 2),
+                        (np.sqrt(3) / 2., -1. / 2), (-np.sqrt(3) / 2.,
+                                                                1. / 2), (-np.sqrt(3) / 2., -1. / 2)]
+                self.syn_dataset = (scale * np.array(centers) + (np.random.randn(6, 2) * 0.5)) * 0.1
+
+                # random sample from syn dataset with small variation
+                idx = np.random.randint(6, size=npar)
+                var = np.random.randn(npar, 2) * 0.001
+                dataset = self.syn_dataset[idx] + var
+
             init_sample = torch.from_numpy(dataset)
+            
 
         self.init_sample = init_sample.float()
 
@@ -187,6 +201,40 @@ class DSBDataset(torch.utils.data.Dataset):
 # afhq dataset                                     #
 # ------------------------------------------------ #
 
+
+class ImageCIFAR10Dataset(torchvision.datasets.CIFAR10):
+    def __init__(self, data_path, size=-1, random_flip=False,
+                 train=True, download=True, device=None):
+        r"""
+        Dataset for CIFAR10 dataset.
+
+        data_path: str
+            Path to the dataset, pre-built as a .png file
+        """
+        super().__init__(data_path, download=download, train=train)
+        self.data_path = data_path
+        self.size = size if size > 0 else len(self.data)
+        self.device = device
+
+        self.train_transforms =transforms.Compose(
+        [
+            transforms.RandomHorizontalFlip() if random_flip else transforms.Lambda(lambda x: x),
+            transforms.ToTensor(),
+            transforms.Normalize([0.4914, 0.4822, 0.4465], [0.2023, 0.1994, 0.2010]),
+        ])
+
+    def __len__(self):
+        return self.size
+
+    def __getitem__(self, idx):
+        img, target = self.data[idx % len(self.data)], self.targets[idx % len(self.data)]
+
+        # doing this so that it is consistent with all other datasets
+        # to return a PIL Image
+        img = Image.fromarray(img)
+        _data = self.train_transforms(img).to(self.device)
+
+        return _data
 
 class ImageAFHQDataset(torch.utils.data.Dataset):
     def __init__(self, data_path, size=-1, random_flip=False,
@@ -265,7 +313,27 @@ class ImageCelebADataset(torch.utils.data.Dataset):
         _data = self.train_transforms(img)
         return _data
 
+    
+class DistilledDataset(BaseDataset):
+    def __init__(self, img_resolution, channel, ipc, num_classes, size, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.label_syn = torch.tensor([np.ones(ipc)*i for i in range(num_classes)], dtype=torch.long, requires_grad=False).view(-1) # [0,0,0, 1,1,1, ..., 9,9,9]
+        self.image_syn = torch.randn(size=(num_classes, ipc, channel, img_resolution, img_resolution), dtype=torch.float32).requires_grad_(True)
+        self.ipc = ipc
+        self.num_classes = num_classes
+        self.img_resolution = img_resolution
 
+        self.size = size
+
+    def __len__(self):
+        return self.size
+
+    def __getitem__(self, idx):
+        img, target = self.image_syn.flatten(0,1)[idx % len(self.image_syn)], self.label_syn.flatten(0,1)[idx % len(self.image_syn)]
+        _data = img
+
+        return _data
+    
 def create_data(name, gpus=1, dataset_size=2**24, batch_size=2**16, random_flip=False, device=None):
     name = name.lower()
     if 'checkerboard' in name:
@@ -294,6 +362,17 @@ def create_data(name, gpus=1, dataset_size=2**24, batch_size=2**16, random_flip=
         dataset = DSBDataset(dataset_size, '8gaussians')
     elif 'dsb-6gaussians' in name:
         dataset = DSBDataset(dataset_size, '6gaussians')
+    elif 'dsb-6points' in name:
+        dataset = DSBDataset(dataset_size, '6points')
+    elif 'cifar10' in name:
+        dataset = ImageCIFAR10Dataset(
+            path='./dataset', size=dataset_size, device=device
+        )
+    elif 'distilled-dataset-cifar10' in name:
+        dataset = DistilledDataset(
+            img_resolution=32, channel=3, ipc=1, num_classes=10,
+            size=dataset_size, 
+        )
     elif 'afhq-cat' in name:
         dataset = ImageAFHQDataset(
             'dataset/afhq/cat', resolution=int(name.split('-')[-1]),
