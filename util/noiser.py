@@ -1,3 +1,4 @@
+import numpy as np
 import torch
 
 
@@ -175,6 +176,14 @@ class EDMNoiser(BaseNoiser):
         t_steps = (sigma_max ** (1 / rho) + step_indices / (self.num_timesteps - 1) * (sigma_min ** (1 / rho) - sigma_max ** (1 / rho))) ** rho
         self.t_steps = torch.cat([torch.as_tensor(t_steps), torch.zeros_like(t_steps[:1])]) # t_N = 0
 
+        self.S_churn, self.S_min, self.S_max, self.S_noise = 0, 0, float('inf'), 1
+    
+    def add_noise(self, x, t):
+        gamma = min(self.S_churn / self.num_timesteps, np.sqrt(2) - 1) if self.S_min <= t <= self.S_max else 0
+        t_hat = torch.as_tensor(t + gamma * t)
+        x_hat = x + (t_hat ** 2 - t ** 2).sqrt() * self.S_noise * torch.randn_like(x)
+        return x_hat
+
     def coefficient(self, t):
         tmax = t.max() if isinstance(t, torch.Tensor) else t
         if tmax >= len(self.timestep_map):   
@@ -183,7 +192,7 @@ class EDMNoiser(BaseNoiser):
                 'coef1': 1,
             }
         else:
-            t = self.timestep_map[t].float()
+            t = self.timestep_map[t].int()
             ret = {
                 'coef0': self.t_steps[t],
                 'coef1': self.t_steps[self.num_timesteps - t],

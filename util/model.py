@@ -185,10 +185,12 @@ class DSB(BaseModel):
                 x_1 = (x - coef_t['coef0'] * x_0) / coef_t['coef1']
             x = coef_t_next['coef0'] * x_0 + coef_t_next['coef1'] * x_1
         elif self.args.reparam == 'term-edm':
+            t = t[0].item() # just select the first component of t
             if self.direction == 'b':
                 coef_t, coef_t_next = self.get_coef_ts(x, t, 1)
             elif self.direction == 'f':
                 coef_t, coef_t_next = self.get_coef_ts(x, self.num_timesteps - t, -1)
+            x = self.noiser.add_noise(x, t)
             d_cur = (x - x_other) / t
             x = x + (coef_t_next['coef0'] - coef_t['coef0']) * d_cur
         else:
@@ -206,7 +208,7 @@ class DSB(BaseModel):
                 with torch.autocast(device_type="cuda", enabled=self.args.use_amp):
                     t_old = self._forward(x, tt)
                 t_old = t_old.float()
-                if sample and t == self.num_timesteps - 1:
+                if (sample and t == self.num_timesteps - 1) or self.args.reparam == 'term-edm':
                     x = t_old
                 else:
                     x = t_old + torch.sqrt(2 * self.gammas[t]) * torch.randn_like(x)
