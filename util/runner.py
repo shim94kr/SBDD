@@ -295,6 +295,10 @@ class Runner():
             elif self.args.backward_ckpt is not None:
                 ckpt = torch.load(self.args.backward_ckpt, map_location='cpu')
                 self.backward_model.load_state_dict(match_ckpt(ckpt['model']), strict=False)
-            if self.args.forward_ckpt is not None:
+            if self.args.forward_ckpt is not None and self.args.forward_ckpt.endswith('.pkl'):
+                with dnnlib.open_url(self.args.forward_ckpt, verbose=(self.rank == 0)) as f:
+                    data = pickle.load(f)
+                copy_params_and_buffers(src_module=data['ema'], dst_module=self.forward_model, require_all=False)
+            elif self.args.forward_ckpt is not None:
                 ckpt = torch.load(self.args.forward_ckpt, map_location='cpu')
                 self.forward_model.load_state_dict(match_ckpt(ckpt['model']), strict=False)

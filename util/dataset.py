@@ -203,16 +203,16 @@ class DSBDataset(torch.utils.data.Dataset):
 
 
 class ImageCIFAR10Dataset(torchvision.datasets.CIFAR10):
-    def __init__(self, data_path, size=-1, random_flip=False,
+    def __init__(self, path, size=-1, random_flip=False,
                  train=True, download=True, device=None):
         r"""
         Dataset for CIFAR10 dataset.
 
-        data_path: str
+        path: str
             Path to the dataset, pre-built as a .png file
         """
-        super().__init__(data_path, download=download, train=train)
-        self.data_path = data_path
+        super().__init__(path, download=download, train=train)
+        self.path = path
         self.size = size if size > 0 else len(self.data)
         self.device = device
 

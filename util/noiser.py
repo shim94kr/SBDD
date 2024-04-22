@@ -166,6 +166,31 @@ class LinearNoiser(BaseNoiser):
         return ret
 
 
+class EDMNoiser(BaseNoiser):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        sigma_min, sigma_max, rho = 0.002, 80, 7
+        step_indices = torch.arange(self.num_timesteps, dtype=torch.float64, device=self.device)
+        t_steps = (sigma_max ** (1 / rho) + step_indices / (self.num_timesteps - 1) * (sigma_min ** (1 / rho) - sigma_max ** (1 / rho))) ** rho
+        self.t_steps = torch.cat([torch.as_tensor(t_steps), torch.zeros_like(t_steps[:1])]) # t_N = 0
+
+    def coefficient(self, t):
+        tmax = t.max() if isinstance(t, torch.Tensor) else t
+        if tmax >= len(self.timestep_map):   
+            ret = {
+                'coef0': 0,
+                'coef1': 1,
+            }
+        else:
+            t = self.timestep_map[t].float()
+            ret = {
+                'coef0': self.t_steps[t],
+                'coef1': self.t_steps[self.num_timesteps - t],
+            }
+        ret = {k: v.float() if isinstance(v, torch.Tensor) else v for k, v in ret.items()}
+        return ret
+
 class DSBNoiser(BaseNoiser):
     def __init__(self, *args, mean=0, std=1, **kwargs):
         super().__init__(*args, **kwargs)
@@ -222,6 +247,8 @@ def create_noiser(name, *args, **kwargs):
         noiser = LinearNoiser
     elif 'dsb' in name:
         noiser = DSBNoiser
+    elif 'edm' in name:
+        noiser = EDMNoiser
     else:
         raise NotImplementedError
     return noiser(*args, **kwargs)
