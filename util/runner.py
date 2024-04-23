@@ -226,11 +226,11 @@ class Runner():
                     x_prior, x_data, _ = self.next_batch(epoch)
 
                 if self.dsb:
+                    qs = self.backward_model.inference(x_prior, sample=True, label=y_prior)[0]
                     if epoch == 0:
                         ps = self.noiser.trajectory_dsb(x_prior, x_data, sample=True, label=y_data)[0]
                     else:
-                        ps = self.forward_model.inference(x_data, sample=True, label=y_data)[0]
-                    qs = self.backward_model.inference(x_prior, sample=True, label=y_prior)[0]
+                        ps = self.forward_model.inference(x_data, sample=True, label=y_data)[0] / 80.
                 else:
                     qs = self.model.inference(x_prior, return_all=True)[1]
                     ps = self.noiser.trajectory(x_prior, x_data)
@@ -247,11 +247,11 @@ class Runner():
                 )
 
                 if self.dsb:
-                    # Convert to 1D list using list comprehension
-                    qs = torch.cat([sublist for sublist in qs], dim=0)
-                    ps = torch.cat([sublist for sublist in ps], dim=0)
-                    self.evaluators['Inference'].draw(epoch, iters, qs, subfix=f'_q')
-                    self.evaluators['Inference'].draw(epoch, iters, ps, subfix=f'_p')
+                    # to visualize all the samples in the trajectory
+                    #qs = torch.cat([sublist for sublist in qs], dim=0)
+                    #ps = torch.cat([sublist for sublist in ps], dim=0)
+                    self.evaluators['Inference'].draw(epoch, iters, qs[-1], subfix=f'_q')
+                    self.evaluators['Inference'].draw(epoch, iters, ps[-1], subfix=f'_p')
                 else:
                     self.evaluators['Inference'].draw(epoch, iters, qs[-1])
 

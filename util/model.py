@@ -28,7 +28,7 @@ class BaseModel(torch.nn.Module):
         self.rank = rank
 
         if self.args.network == 'edm-vp':
-            self.network = EDMPrecond(img_resolution=32, img_channels=3, label_dim=10, use_fp16=True,
+            self.network = EDMPrecond(img_resolution=32, img_channels=3, label_dim=10,
                                       model_type='SongUNet', channel_mult=[2,2,2])
         elif self.args.network == 'mlp':
             self.network = ResMLP(dim_in=2, dim_out=2, dim_hidden=128, num_layers=5, n_cond=self.noiser.training_timesteps)
@@ -180,11 +180,11 @@ class DSB(BaseModel):
             else:
                 x = self.noiser.add_noise(x, t)
                 x_other = self.forward(x, t, label)
+
                 if self.direction == 'b':
                     coef_t, coef_t_next = self.get_coef_ts(x, t, 1)
                 elif self.direction == 'f':
                     coef_t, coef_t_next = self.get_coef_ts(x, self.num_timesteps - t, -1)
-
                 d_cur = (x - x_other) / coef_t['coef0']
                 x = x + (coef_t_next['coef0'] - coef_t['coef0']) * d_cur
         else:
