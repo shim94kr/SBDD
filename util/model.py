@@ -76,7 +76,10 @@ class BaseModel(torch.nn.Module):
     def forward(self, x_t, t, label = None):
         t = self.noiser.timestep_map[t]
         if self.args.reparam == 'term-edm':
-            t = self.noiser.t_steps[t]
+            if self.direction == 'b':
+                t = self.noiser.t_steps[t]
+            elif self.direction == 'f':
+                t = self.noiser.t_steps[self.num_timesteps - t]
             y = torch.eye(self.network.module.label_dim, device='cuda')[label]
             x = self.network(x_t, t, y)
         else:
@@ -170,36 +173,42 @@ class DSB(BaseModel):
         return coef_t, coef_t_other
 
     def _forward(self, x, t, label=None):
-        x_other = self.forward(x, t, label)
-        if self.args.reparam == 'flow':
-            v_pred = x_other
-            if self.direction == 'b':
-                coef_t, coef_t_next = self.get_coef_ts(x, t, 1)
-                x = x + (coef_t_next['coef1'] - coef_t['coef1']) * v_pred
-            elif self.direction == 'f':
-                coef_t, coef_t_next = self.get_coef_ts(x, self.num_timesteps - t, -1)
-                x = x + (coef_t_next['coef0'] - coef_t['coef0']) * v_pred
-        elif self.args.reparam == 'term':
-            if self.direction == 'b':
-                coef_t, coef_t_next = self.get_coef_ts(x, t, 1)
-                x_1 = x_other
-                x_0 = (x - coef_t['coef1'] * x_1) / coef_t['coef0']
-            elif self.direction == 'f':
-                coef_t, coef_t_next = self.get_coef_ts(x, self.num_timesteps - t, -1)
-                x_0 = x_other
-                x_1 = (x - coef_t['coef0'] * x_0) / coef_t['coef1']
-            x = coef_t_next['coef0'] * x_0 + coef_t_next['coef1'] * x_1
-        elif self.args.reparam == 'term-edm':
+        if self.args.reparam == 'term-edm':
             t = t[0].item() # just select the first component of t
-            if self.direction == 'b':
-                coef_t, coef_t_next = self.get_coef_ts(x, t, 1)
-            elif self.direction == 'f':
-                coef_t, coef_t_next = self.get_coef_ts(x, self.num_timesteps - t, -1)
-            # x = self.noiser.add_noise(x, t)
-            d_cur = (x - x_other) / self.noiser.t_steps[t]
-            x = x + (coef_t_next['coef0'] - coef_t['coef0']) * d_cur
+            if self.direction == 'f' and t == 0:
+                x = x
+            else:
+                x = self.noiser.add_noise(x, t)
+                x_other = self.forward(x, t, label)
+                if self.direction == 'b':
+                    coef_t, coef_t_next = self.get_coef_ts(x, t, 1)
+                elif self.direction == 'f':
+                    coef_t, coef_t_next = self.get_coef_ts(x, self.num_timesteps - t, -1)
+
+                d_cur = (x - x_other) / coef_t['coef0']
+                x = x + (coef_t_next['coef0'] - coef_t['coef0']) * d_cur
         else:
-            x = x_other
+            x_other = self.forward(x, t, label)
+            if self.args.reparam == 'flow':
+                v_pred = x_other
+                if self.direction == 'b':
+                    coef_t, coef_t_next = self.get_coef_ts(x, t, 1)
+                    x = x + (coef_t_next['coef1'] - coef_t['coef1']) * v_pred
+                elif self.direction == 'f':
+                    coef_t, coef_t_next = self.get_coef_ts(x, self.num_timesteps - t, -1)
+                    x = x + (coef_t_next['coef0'] - coef_t['coef0']) * v_pred
+            elif self.args.reparam == 'term':
+                if self.direction == 'b':
+                    coef_t, coef_t_next = self.get_coef_ts(x, t, 1)
+                    x_1 = x_other
+                    x_0 = (x - coef_t['coef1'] * x_1) / coef_t['coef0']
+                elif self.direction == 'f':
+                    coef_t, coef_t_next = self.get_coef_ts(x, self.num_timesteps - t, -1)
+                    x_0 = x_other
+                    x_1 = (x - coef_t['coef0'] * x_0) / coef_t['coef1']
+                x = coef_t_next['coef0'] * x_0 + coef_t_next['coef1'] * x_1
+            else:
+                x = x_other
         return x
 
     def inference(self, x, sample=False, label=None):
@@ -217,6 +226,7 @@ class DSB(BaseModel):
                     x = t_old
                 else:
                     x = t_old + torch.sqrt(2 * self.gammas[t]) * torch.randn_like(x)
+
                 x_cache.append(x.clone())
                 if self.args.simplify:
                     if self.args.reparam == 'flow':
