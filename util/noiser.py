@@ -182,7 +182,7 @@ class EDMNoiser(BaseNoiser):
         gamma = min(self.S_churn / self.num_timesteps, np.sqrt(2) - 1) if self.S_min <= t <= self.S_max else 0
         t_hat = torch.as_tensor(t + gamma * t)
         x_hat = x + (t_hat ** 2 - t ** 2).sqrt() * self.S_noise * torch.randn_like(x)
-        return x_hat
+        return x_hat, t_hat
 
     def coefficient(self, t):
         tmax = t.max() if isinstance(t, torch.Tensor) else t

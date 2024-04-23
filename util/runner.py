@@ -226,11 +226,11 @@ class Runner():
                     x_prior, x_data, _ = self.next_batch(epoch)
 
                 if self.dsb:
-                    qs = self.backward_model.inference(x_prior, sample=True, label=y_prior)[0]
                     if epoch == 0:
                         ps = self.noiser.trajectory_dsb(x_prior, x_data, sample=True, label=y_data)[0]
                     else:
                         ps = self.forward_model.inference(x_data, sample=True, label=y_data)[0] / 80.
+                    qs = self.backward_model.inference(x_prior, sample=True, label=y_prior)[0]
                 else:
                     qs = self.model.inference(x_prior, return_all=True)[1]
                     ps = self.noiser.trajectory(x_prior, x_data)

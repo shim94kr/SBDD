@@ -74,15 +74,11 @@ class BaseModel(torch.nn.Module):
         raise NotImplementedError
 
     def forward(self, x_t, t, label = None):
-        t = self.noiser.timestep_map[t]
         if self.args.reparam == 'term-edm':
-            if self.direction == 'b':
-                t = self.noiser.t_steps[t]
-            elif self.direction == 'f':
-                t = self.noiser.t_steps[self.num_timesteps - t]
             y = torch.eye(self.network.module.label_dim, device='cuda')[label]
             x = self.network(x_t, t, y)
         else:
+            t = self.noiser.timestep_map[t]
             x = self.network(x_t, t)
         return x
 
@@ -178,15 +174,16 @@ class DSB(BaseModel):
             if self.direction == 'f' and t == 0:
                 x = x
             else:
-                x = self.noiser.add_noise(x, t)
-                x_other = self.forward(x, t, label)
-
                 if self.direction == 'b':
                     coef_t, coef_t_next = self.get_coef_ts(x, t, 1)
                 elif self.direction == 'f':
                     coef_t, coef_t_next = self.get_coef_ts(x, self.num_timesteps - t, -1)
-                d_cur = (x - x_other) / coef_t['coef0']
-                x = x + (coef_t_next['coef0'] - coef_t['coef0']) * d_cur
+                
+                x_hat, t_hat = self.noiser.add_noise(x, coef_t['coef0'])
+                x_other = self.forward(x_hat, t_hat, label)
+
+                d_cur = (x_hat - x_other) / coef_t['coef0']
+                x = x_hat + (coef_t_next['coef0'] - coef_t['coef0']) * d_cur
         else:
             x_other = self.forward(x, t, label)
             if self.args.reparam == 'flow':
