@@ -9,15 +9,11 @@ import util.dnnlib as dnnlib
 
 class Runner():
     def __init__(self, args):
+        #어지간하면 안봐도 되는 것들 모음 (loss criterion, dataset 저장 등등)
+        base_steps_per_epoch = 2 ** 10
         self.args = args
         self.rank = self.args.local_rank
-
-        self.dsb = 'dsb' in self.args.method
-
         self.device = torch.device(f'cuda')
-
-        base_steps_per_epoch = 2 ** 10
-
         self.prior_set, self.prior_sampler, self.prior_loader = create_data(
             self.args.prior, self.args.gpus, dataset_size=base_steps_per_epoch*self.args.batch_size, 
             batch_size=self.args.batch_size)
@@ -25,10 +21,8 @@ class Runner():
             self.args.dataset, self.args.gpus, dataset_size=base_steps_per_epoch*self.args.batch_size, 
             batch_size=self.args.batch_size)
         self.prior_iterator, self.data_iterator = iter(self.prior_loader), iter(self.data_loader)
-
         self.criterion = torch.nn.MSELoss(reduction='none')
         self.scaler = torch.cuda.amp.GradScaler(enabled=self.args.use_amp)
-
         if not self.args.exp2d:
             self.val_prior_set = None
             self.val_data_set = None
@@ -40,23 +34,19 @@ class Runner():
                     self.args.val_dataset, self.args.gpus, dataset_size=base_steps_per_epoch*self.args.batch_size, 
                     batch_size=self.args.batch_size)
 
+        #noiser 및 model 설정(각 모델 별 optimizer 등)
+        self.dsb = 'dsb' in self.args.method
         if self.dsb:
             assert self.args.training_timesteps == self.args.inference_timesteps
-
             self.noiser = create_noiser(self.args.noiser, args, self.device)
-
             self.cache_size = self.cnt = base_steps_per_epoch * self.args.batch_size * 4
-
             self.backward_model = create_model(self.args.method, self.args, self.device, self.noiser, rank=self.rank, direction='b')
             self.forward_model = create_model(self.args.method, self.args, self.device, self.noiser, rank=self.rank, direction='f')
-
+            self.backward_model = self.backward_model.to(self.device)
+            self.forward_model = self.forward_model.to(self.device)
             if self.rank == 0:
                 print(f'Backward Network #Params: {sum([p.numel() for p in self.backward_model.parameters()])}')
                 print(f'Forward Network #Params: {sum([p.numel() for p in self.forward_model.parameters()])}')
-
-            self.backward_model = self.backward_model.to(self.device)
-            self.forward_model = self.forward_model.to(self.device)
-
             self.backward_optimizer = torch.optim.AdamW(
                 self.backward_model.parameters(), 
                 lr=self.args.lr,
@@ -67,21 +57,20 @@ class Runner():
                 lr=self.args.lr,
                 weight_decay=self.args.weight_decay
             )
-
             self.model = {'backward': self.backward_model, 'forward': self.forward_model}
             self.optimizer = {'backward': self.backward_optimizer, 'forward': self.forward_optimizer}
             self.direction = 'backward'
         else:
             self.noiser = create_noiser(self.args.noiser, args, self.device)
-
             self.model = create_model(self.args.method, self.args, self.device, self.noiser, rank=self.rank)
             if self.rank == 0:
                 print(f'#Params: {sum([p.numel() for p in self.model.parameters()])}')
-
             self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.args.lr)
 
+        #Load model parameter 
         self.load_ckpt()
 
+        #model (.pt) save repository
         self.save_path = os.path.join('exp', self.args.exp_name)
 
         if self.args.global_rank == 0:
@@ -97,10 +86,26 @@ class Runner():
         except StopIteration:
             self.prior_iterator, self.data_iterator = iter(self.prior_loader), iter(self.data_loader)
             x_0, x_1 = next(self.prior_iterator), next(self.data_iterator)
+
         x_0, x_1 = x_0.to(self.device), x_1.to(self.device)
         return x_0, x_1
 
-    def next_batch(self, epoch, dsb=False):
+    #Data_loader에서, 특정 batch 1개(labeled dataset일 때)을 가져오는 함수
+    def _next_batch_with_label(self):
+        try:
+            x_0, y_0 = next(self.prior_iterator)
+            x_1, y_1 = next(self.data_iterator)
+        except StopIteration:
+            self.prior_iterator, self.data_iterator = iter(self.prior_loader), iter(self.data_loader)
+            x_0, y_0 = next(self.prior_iterator)
+            x_1, y_1 = next(self.data_iterator)
+
+        x_0, x_1 = x_0.to(self.device), x_1.to(self.device)
+        y_0, y_1 = y_0.to(self.device), y_1.to(self.device)
+        return x_0, y_0, x_1, y_1
+    
+    def next_batch(self, epoch, dsb=False, labeled_data=False):
+        #힌 batch_size * step per epoch 갯수만큼 data를 참고하겠다는 것 (x, gt, t) pair: 하나의 data라고 보면 된다
         if dsb:
             if self.cnt + self.args.batch_size > self.cache_size:
                 self.x_cache, self.gt_cache, self.t_cache = [], [], []
@@ -108,17 +113,31 @@ class Runner():
                 num_cache = math.ceil(self.cache_size / self.args.batch_size / self.noiser.num_timesteps)
                 pbar = tqdm.trange(num_cache, desc=f'Cache epoch {epoch} model {self.direction}') if self.rank == 0 else range(num_cache)
                 for _ in pbar:
-                    x_0, x_1 = self._next_batch()
+                    #X_0: data from prior dist. X_1: data from data dist.
+                    if labeled_data==True:
+                        x_0, y_0, x_1, y_1 = self._next_batch_with_label()
+                    else:
+                        x_0, x_1 = self._next_batch()
+
                     with torch.no_grad():
-                        if self.direction == 'backward' and epoch == 0:
+                        if self.direction == 'backward' and epoch == 0: #현재 이 부분이 사용되고 있지 않음(사유: epoch 0이 skip되기 때문)
                             _x_cache, _gt_cache, _t_cache = self.noiser.trajectory_dsb(x_0, x_1)
                         else:
                             model = self.model['backward' if self.direction == 'forward' else 'forward']
                             model.eval()
-                            _x_cache, _gt_cache, _t_cache = model.inference(x_0 if self.direction == 'forward' else x_1)
+                            if labeled_data==True:
+                                #중요한 점: 여기서의 inference는, 현재 학습중인 방향의 반대 방향의 trajectory를 요구한다.
+                                if self.direction=="forward":
+                                    _x_cache, _gt_cache, _t_cache = model.inference(x_0, sample=False, label=y_0)
+                                else:
+                                    _x_cache, _gt_cache, _t_cache = model.inference(x_1, sample=False, label=y_1)
+                            else:
+                                _x_cache, _gt_cache, _t_cache = model.inference(x_0 if self.direction == 'forward' else x_1)
+
                     self.x_cache.append(_x_cache)
                     self.gt_cache.append(_gt_cache)
                     self.t_cache.append(_t_cache)
+
                 self.x_cache = torch.cat(self.x_cache, dim=0).cpu()
                 self.gt_cache = torch.cat(self.gt_cache, dim=0).cpu()
                 self.t_cache = torch.cat(self.t_cache, dim=0).cpu()
@@ -140,37 +159,48 @@ class Runner():
         steps_per_epoch = int(len(self.data_loader) * self.args.repeat_per_epoch)
         self.cache_size = min(self.cache_size, steps_per_epoch * self.args.batch_size)
         for epoch in range(self.args.epochs):
-            if epoch < self.args.skip_epochs:
-                print(f'Skipping ep{epoch} and evaluate.')
-                self.evaluate(epoch, 0, last=True)
-                continue
-
-            if epoch > 0 and epoch % 2 == 0:
-                self.noiser.gammas *= 0.5
-
-            self.noiser.train()
-            if self.dsb:
-                self.cnt = self.cache_size
-                self.direction = 'backward' if epoch % 2 == 0 else 'forward'
-                model, optimizer = self.model[self.direction], self.optimizer[self.direction]
-            else:
-                model, optimizer = self.model, self.optimizer
-            model.train()
-            if self.rank == 0:
-                pbar = tqdm.tqdm(total=steps_per_epoch)
+            
+            #바꿀 필요 없는 것들 모음
             ema_loss, ema_loss_w = None, lambda x: min(0.99, x / 10)
             if self.prior_sampler is not None:
                 self.prior_sampler.set_epoch(epoch)
                 self.data_sampler.set_epoch(epoch)
 
+
+            #초반의 몇개 epoch 학습을 skip하는 option
+            if epoch < self.args.skip_epochs:
+                print(f'Skipping ep{epoch} and evaluate.')
+                #self.evaluate(epoch, 0, last=True)
+                continue
+
+            #Gamma decay over time 
+            if epoch > 0 and epoch % 2 == 0:
+                self.noiser.gammas *= self.args.gamma_decay
+            self.noiser.train()
+
+            #DSB/others 학습 방법 차이
+            if self.dsb:
+                self.cnt = self.cache_size
+                self.direction = 'backward' if epoch % 2 == 0 else 'forward'
+                model, optimizer = self.model[self.direction], self.optimizer[self.direction]
+                model.train()
+            else:
+                model, optimizer = self.model, self.optimizer
+                model.train()
+            
+            #rank=0(process 1)에서 visualization용
+            if self.rank == 0:
+                pbar = tqdm.tqdm(total=steps_per_epoch)
             for i in range(steps_per_epoch):
+                #하나의 batch에 대해, 특정 trajectory로 학습을 진행하는 코드.
                 if self.dsb:
-                    x_t, gt, t = self.next_batch(epoch, dsb=True)
+                    x_t, gt, t = self.next_batch(epoch, dsb=True, labeled_data=("distilled" in self.args.prior))
                 else:
                     x_0, x_1, t = self.next_batch(epoch)
                     x_t = self.noiser(x_0, x_1, t)
                     gt = model.target(x_0, x_1, x_t, t)
                 optimizer.zero_grad()
+                #loss 계산
                 with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=self.args.use_amp):
                     pred = model(x_t, t)
                     raw_loss = self.criterion(pred, gt).mean(dim=-1)
@@ -196,7 +226,6 @@ class Runner():
 
     def evaluate(self, epoch, iters, last=False):
         with torch.no_grad():
-
             if self.dsb:
                 self.backward_model.eval()
                 self.forward_model.eval()
@@ -204,10 +233,8 @@ class Runner():
                 self.model.eval()
 
             if self.args.global_rank == 0:
-
                 if last:
                     self.save_ckpt(epoch, iters)
-
                 if not self.args.exp2d:
                     x_prior = torch.stack(
                         [self.val_prior_set[_i][0] for _i in range(16)], dim=0

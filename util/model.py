@@ -74,6 +74,7 @@ class BaseModel(torch.nn.Module):
         raise NotImplementedError
 
     def forward(self, x_t, t, label = None):
+        #input label size : N x 1
         if self.args.reparam == 'term-edm':
             y = torch.eye(self.network.module.label_dim, device='cuda')[label]
             x = self.network(x_t, t, y)
@@ -184,6 +185,7 @@ class DSB(BaseModel):
 
                 d_cur = (x_hat - x_other) / coef_t['coef0']
                 x = x_hat + (coef_t_next['coef0'] - coef_t['coef0']) * d_cur
+        #EDM setup에서는 볼 필요 없음
         else:
             x_other = self.forward(x, t, label)
             if self.args.reparam == 'flow':
@@ -209,6 +211,7 @@ class DSB(BaseModel):
         return x
 
     def inference(self, x, sample=False, label=None):
+        #sample: visualization을 위한 option
         ones = torch.ones(size=(x.shape[0],), dtype=torch.int64, device=self.device)
         x_cache, gt_cache, t_cache = [], [], []
         x_raw = x.clone()

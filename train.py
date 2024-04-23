@@ -25,8 +25,8 @@ def main(args):
 
     runner = Runner(args)
 
-    #runner.train()
-    runner.evaluate(epoch=1, iters=0)
+    runner.train()
+    #runner.evaluate(epoch=1, iters=0)
 
     return
 
@@ -61,7 +61,7 @@ def create_parser():
     argparser.add_argument('--use_amp', action='store_true', help='whether to use mixed-precision training')
     argparser.add_argument('--log_interval', type=int, default=128, help='interval for printing log')
     argparser.add_argument('--evaluate_interval', type=int, default=1024, help='interval for evaluate and save results')
-
+    argparser.add_argument('--gamma_decay', type=float, default=0.5, help='decay of gammas as 2 epoch goes (train-specific)')
     argparser.add_argument('--prior', type=str, default='standard', help='prior distribution')
     argparser.add_argument('--dataset', type=str, default='checkerboard:4', help='data distribution')
     argparser.add_argument('--val_prior', type=str, default=None, help='prior distribution for evaluation, only available in image experiments')

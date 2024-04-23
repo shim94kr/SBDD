@@ -234,6 +234,9 @@ class ImageCIFAR10Dataset(torchvision.datasets.CIFAR10):
         img = Image.fromarray(img)
         _data = self.train_transforms(img).to(self.device)
 
+        #without gradient 
+        _data.requires_grad=False
+        
         return _data, target
 
 class ImageAFHQDataset(torch.utils.data.Dataset):
@@ -332,6 +335,11 @@ class DistilledDataset(BaseDataset):
         image_syn = self.image_syn.flatten(0,1) * 80.
         label_syn = self.label_syn.flatten(0,1)
         img, target = image_syn[idx % len(image_syn)], label_syn[idx % len(image_syn)]
+
+        #without gradient
+        img=img.detach()
+        target.requires_grad=False
+
 
         return img, target
     
