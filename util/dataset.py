@@ -234,7 +234,7 @@ class ImageCIFAR10Dataset(torchvision.datasets.CIFAR10):
         img = Image.fromarray(img)
         _data = self.train_transforms(img).to(self.device)
 
-        return _data
+        return _data, target
 
 class ImageAFHQDataset(torch.utils.data.Dataset):
     def __init__(self, data_path, size=-1, random_flip=False,
@@ -317,7 +317,7 @@ class ImageCelebADataset(torch.utils.data.Dataset):
 class DistilledDataset(BaseDataset):
     def __init__(self, img_resolution, channel, ipc, num_classes, size, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.label_syn = torch.tensor([np.ones(ipc)*i for i in range(num_classes)], dtype=torch.long, requires_grad=False).view(-1) # [0,0,0, 1,1,1, ..., 9,9,9]
+        self.label_syn = torch.tensor([[np.ones(ipc)*i] for i in range(num_classes)], dtype=torch.long, requires_grad=False) # [0,0,0, 1,1,1, ..., 9,9,9]
         self.image_syn = torch.randn(size=(num_classes, ipc, channel, img_resolution, img_resolution), dtype=torch.float32).requires_grad_(True)
         self.ipc = ipc
         self.num_classes = num_classes
@@ -329,10 +329,11 @@ class DistilledDataset(BaseDataset):
         return self.size
 
     def __getitem__(self, idx):
-        img, target = self.image_syn.flatten(0,1)[idx % len(self.image_syn)], self.label_syn.flatten(0,1)[idx % len(self.image_syn)]
-        _data = img
+        image_syn = self.image_syn.flatten(0,1) * 80.
+        label_syn = self.label_syn.flatten(0,1)
+        img, target = image_syn[idx % len(image_syn)], label_syn[idx % len(image_syn)]
 
-        return _data
+        return img, target
     
 def create_data(name, gpus=1, dataset_size=2**24, batch_size=2**16, random_flip=False, device=None):
     name = name.lower()
@@ -364,14 +365,14 @@ def create_data(name, gpus=1, dataset_size=2**24, batch_size=2**16, random_flip=
         dataset = DSBDataset(dataset_size, '6gaussians')
     elif 'dsb-6points' in name:
         dataset = DSBDataset(dataset_size, '6points')
-    elif 'cifar10' in name:
-        dataset = ImageCIFAR10Dataset(
-            path='./dataset', size=dataset_size, device=device
-        )
     elif 'distilled-dataset-cifar10' in name:
         dataset = DistilledDataset(
             img_resolution=32, channel=3, ipc=1, num_classes=10,
             size=dataset_size, 
+        )
+    elif 'cifar10' in name:
+        dataset = ImageCIFAR10Dataset(
+            path='./dataset', size=dataset_size, device=device
         )
     elif 'afhq-cat' in name:
         dataset = ImageAFHQDataset(

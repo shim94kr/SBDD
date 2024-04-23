@@ -73,9 +73,14 @@ class BaseModel(torch.nn.Module):
     def target(self, x_0, x_1, x_t, t):
         raise NotImplementedError
 
-    def forward(self, x_t, t):
+    def forward(self, x_t, t, label = None):
         t = self.noiser.timestep_map[t]
-        x = self.network(x_t, t)
+        if self.args.reparam == 'term-edm':
+            t = self.noiser.t_steps[t]
+            y = torch.eye(self.network.module.label_dim, device='cuda')[label]
+            x = self.network(x_t, t, y)
+        else:
+            x = self.network(x_t, t)
         return x
 
     def predict_boundary(self, x_0, x_t, t):
@@ -164,8 +169,8 @@ class DSB(BaseModel):
         coef_t_other = check_size(x, self.noiser.coefficient(t + delta))
         return coef_t, coef_t_other
 
-    def _forward(self, x, t):
-        x_other = self.forward(x, t)
+    def _forward(self, x, t, label=None):
+        x_other = self.forward(x, t, label)
         if self.args.reparam == 'flow':
             v_pred = x_other
             if self.direction == 'b':
@@ -190,14 +195,14 @@ class DSB(BaseModel):
                 coef_t, coef_t_next = self.get_coef_ts(x, t, 1)
             elif self.direction == 'f':
                 coef_t, coef_t_next = self.get_coef_ts(x, self.num_timesteps - t, -1)
-            x = self.noiser.add_noise(x, t)
-            d_cur = (x - x_other) / t
+            # x = self.noiser.add_noise(x, t)
+            d_cur = (x - x_other) / self.noiser.t_steps[t]
             x = x + (coef_t_next['coef0'] - coef_t['coef0']) * d_cur
         else:
             x = x_other
         return x
 
-    def inference(self, x, sample=False):
+    def inference(self, x, sample=False, label=None):
         ones = torch.ones(size=(x.shape[0],), dtype=torch.int64, device=self.device)
         x_cache, gt_cache, t_cache = [], [], []
         x_raw = x.clone()
@@ -206,7 +211,7 @@ class DSB(BaseModel):
                 tt = ones * t
                 x_old = x.clone()
                 with torch.autocast(device_type="cuda", enabled=self.args.use_amp):
-                    t_old = self._forward(x, tt)
+                    t_old = self._forward(x, tt, label)
                 t_old = t_old.float()
                 if (sample and t == self.num_timesteps - 1) or self.args.reparam == 'term-edm':
                     x = t_old
