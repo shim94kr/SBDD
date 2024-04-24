@@ -26,6 +26,7 @@ class BaseModel(torch.nn.Module):
         self.device = device
         self.noiser = noiser
         self.rank = rank
+        self.label_dim = 10
 
         if self.args.network == 'edm-vp':
             self.network = EDMPrecond(img_resolution=32, img_channels=3, label_dim=10,
@@ -75,7 +76,7 @@ class BaseModel(torch.nn.Module):
 
     def forward(self, x_t, t, label = None):
         if self.args.reparam == 'term-edm':
-            y = torch.eye(self.network.module.label_dim, device='cuda')[label]
+            y = torch.eye(self.label_dim, device='cuda')[label]
             x = self.network(x_t, t, y)
         else:
             t = self.noiser.timestep_map[t]
@@ -210,7 +211,7 @@ class DSB(BaseModel):
 
     def inference(self, x, sample=False, label=None):
         ones = torch.ones(size=(x.shape[0],), dtype=torch.int64, device=self.device)
-        x_cache, gt_cache, t_cache = [], [], []
+        x_cache, gt_cache, t_cache, y_cache = [], [], [], []
         x_raw = x.clone()
         with torch.no_grad():
             for t in range(self.num_timesteps):
@@ -236,10 +237,12 @@ class DSB(BaseModel):
                     t_new = self._forward(x, tt)
                     gt_cache.append(x + t_old - t_new)
                 t_cache.append(self.num_timesteps - 1 - tt)
+                y_cache.append(label)
         x_cache = torch.stack([x_raw] + x_cache, dim=0).cpu() if sample else torch.cat(x_cache, dim=0).cpu()
         gt_cache = torch.cat(gt_cache, dim=0).cpu()
         t_cache = torch.cat(t_cache, dim=0).cpu()
-        return x_cache, gt_cache, t_cache
+        y_cache = torch.cat(y_cache, dim=0).cpu()
+        return x_cache, gt_cache, t_cache, y_cache
 
 
 def create_model(name, *args, **kwargs):

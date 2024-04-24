@@ -315,13 +315,15 @@ class ImageCelebADataset(torch.utils.data.Dataset):
 
     
 class DistilledDataset(BaseDataset):
-    def __init__(self, img_resolution, channel, ipc, num_classes, size, *args, **kwargs):
+    def __init__(self, img_resolution, channel, ipc, num_classes, size, var = 0.01, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.label_syn = torch.tensor([[np.ones(ipc)*i] for i in range(num_classes)], dtype=torch.long, requires_grad=False) # [0,0,0, 1,1,1, ..., 9,9,9]
-        self.image_syn = torch.randn(size=(num_classes, ipc, channel, img_resolution, img_resolution), dtype=torch.float32).requires_grad_(True)
+        self.image_syn = torch.randn(size=(num_classes, ipc, channel, img_resolution, img_resolution), dtype=torch.float32)
         self.ipc = ipc
         self.num_classes = num_classes
         self.img_resolution = img_resolution
+        self.channel = channel
+        self.var = var
 
         self.size = size
 
@@ -332,6 +334,7 @@ class DistilledDataset(BaseDataset):
         image_syn = self.image_syn.flatten(0,1) * 80.
         label_syn = self.label_syn.flatten(0,1)
         img, target = image_syn[idx % len(image_syn)], label_syn[idx % len(image_syn)]
+        img = img + self.var * torch.randn(size=(self.channel, self.img_resolution, self.img_resolution), dtype=torch.float32)
 
         return img, target
     

@@ -176,7 +176,7 @@ class EDMNoiser(BaseNoiser):
         t_steps = (sigma_max ** (1 / rho) + step_indices / (self.num_timesteps - 1) * (sigma_min ** (1 / rho) - sigma_max ** (1 / rho))) ** rho
         self.t_steps = torch.cat([torch.as_tensor(t_steps), torch.zeros_like(t_steps[:1])]) # t_N = 0
 
-        self.S_churn, self.S_min, self.S_max, self.S_noise = 0, 0, float('inf'), 1
+        self.S_churn, self.S_min, self.S_max, self.S_noise = 40, 0, float('inf'), 2
     
     def add_noise(self, x, t):
         gamma = min(self.S_churn / self.num_timesteps, np.sqrt(2) - 1) if self.S_min <= t <= self.S_max else 0

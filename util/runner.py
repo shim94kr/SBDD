@@ -16,7 +16,7 @@ class Runner():
 
         self.device = torch.device(f'cuda')
 
-        base_steps_per_epoch = 2 ** 10
+        base_steps_per_epoch = 2 ** 5 # 2**10
 
         self.prior_set, self.prior_sampler, self.prior_loader = create_data(
             self.args.prior, self.args.gpus, dataset_size=base_steps_per_epoch*self.args.batch_size, 
@@ -45,7 +45,7 @@ class Runner():
 
             self.noiser = create_noiser(self.args.noiser, args, self.device)
 
-            self.cache_size = self.cnt = base_steps_per_epoch * self.args.batch_size * 4
+            self.cache_size = self.cnt = self.args.batch_size * 40 # base_steps_per_epoch * self.args.batch_size * 4
 
             self.backward_model = create_model(self.args.method, self.args, self.device, self.noiser, rank=self.rank, direction='b')
             self.forward_model = create_model(self.args.method, self.args, self.device, self.noiser, rank=self.rank, direction='f')
@@ -93,33 +93,40 @@ class Runner():
 
     def _next_batch(self):
         try:
-            x_0, x_1 = next(self.prior_iterator), next(self.data_iterator)
+            (x_0, y_0), (x_1, y_1) = next(self.prior_iterator), next(self.data_iterator)
         except StopIteration:
             self.prior_iterator, self.data_iterator = iter(self.prior_loader), iter(self.data_loader)
-            x_0, x_1 = next(self.prior_iterator), next(self.data_iterator)
+            (x_0, y_0), (x_1, y_1) = next(self.prior_iterator), next(self.data_iterator)
         x_0, x_1 = x_0.to(self.device), x_1.to(self.device)
-        return x_0, x_1
+        y_0, y_1 = y_0.to(self.device), y_1.to(self.device)
+        return x_0, y_0, x_1, y_1
 
     def next_batch(self, epoch, dsb=False):
         if dsb:
             if self.cnt + self.args.batch_size > self.cache_size:
                 self.x_cache, self.gt_cache, self.t_cache = [], [], []
                 self.x_0_cache, self.x_1_cache = [], []
+
+                self.y_cache = []
+                self.y_0_cache, self.y_1_cache = [], []
                 num_cache = math.ceil(self.cache_size / self.args.batch_size / self.noiser.num_timesteps)
                 pbar = tqdm.trange(num_cache, desc=f'Cache epoch {epoch} model {self.direction}') if self.rank == 0 else range(num_cache)
                 for _ in pbar:
-                    x_0, x_1 = self._next_batch()
+                    x_0, y_0, x_1, y_1 = self._next_batch()
                     with torch.no_grad():
                         if self.direction == 'backward' and epoch == 0:
                             _x_cache, _gt_cache, _t_cache = self.noiser.trajectory_dsb(x_0, x_1)
                         else:
                             model = self.model['backward' if self.direction == 'forward' else 'forward']
                             model.eval()
-                            _x_cache, _gt_cache, _t_cache = model.inference(x_0 if self.direction == 'forward' else x_1)
+                            y = y_0 if self.direction == 'forward' else y_1
+                            _x_cache, _gt_cache, _t_cache, _y_cache = model.inference(x_0 if self.direction == 'forward' else x_1, label = y)
                     self.x_cache.append(_x_cache)
+                    self.y_cache.append(_y_cache)
                     self.gt_cache.append(_gt_cache)
                     self.t_cache.append(_t_cache)
                 self.x_cache = torch.cat(self.x_cache, dim=0).cpu()
+                self.y_cache = torch.cat(self.y_cache, dim=0).cpu()
                 self.gt_cache = torch.cat(self.gt_cache, dim=0).cpu()
                 self.t_cache = torch.cat(self.t_cache, dim=0).cpu()
                 self.cnt = 0
@@ -127,10 +134,11 @@ class Runner():
             index = self.indexs[self.cnt:self.cnt + self.args.batch_size]
             self.cnt += self.args.batch_size
             x = self.x_cache[index]
+            y = self.y_cache[index]
             gt = self.gt_cache[index]
             t = self.t_cache[index]
-            x, gt, t = x.to(self.device), gt.to(self.device), t.to(self.device)
-            return x, gt, t
+            x, y, gt, t = x.to(self.device), y.to(self.device), gt.to(self.device), t.to(self.device)
+            return x, y, gt, t
         else:
             x_0, x_1 = self._next_batch()
             t = torch.randint(low=0, high=self.noiser.num_timesteps, size=(x_0.shape[0],), dtype=torch.int64, device=self.device)
@@ -142,11 +150,12 @@ class Runner():
         for epoch in range(self.args.epochs):
             if epoch < self.args.skip_epochs:
                 print(f'Skipping ep{epoch} and evaluate.')
-                self.evaluate(epoch, 0, last=True)
+                # self.evaluate(epoch, 0, last=True)
                 continue
 
             if epoch > 0 and epoch % 2 == 0:
-                self.noiser.gammas *= 0.5
+                #self.noiser.gammas *= 0.5
+                self.noiser.S_noise *= 0.5
 
             self.noiser.train()
             if self.dsb:
@@ -165,14 +174,14 @@ class Runner():
 
             for i in range(steps_per_epoch):
                 if self.dsb:
-                    x_t, gt, t = self.next_batch(epoch, dsb=True)
+                    x_t, y, gt, t = self.next_batch(epoch, dsb=True)
                 else:
                     x_0, x_1, t = self.next_batch(epoch)
                     x_t = self.noiser(x_0, x_1, t)
                     gt = model.target(x_0, x_1, x_t, t)
                 optimizer.zero_grad()
                 with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=self.args.use_amp):
-                    pred = model(x_t, t)
+                    pred = model(x_t, t, y)
                     raw_loss = self.criterion(pred, gt).mean(dim=-1)
                     loss = raw_loss.mean()
                 ema_loss = loss.item() if ema_loss is None else (ema_loss * ema_loss_w(i) + loss.item() * (1 - ema_loss_w(i)))
@@ -226,11 +235,11 @@ class Runner():
                     x_prior, x_data, _ = self.next_batch(epoch)
 
                 if self.dsb:
+                    qs = self.backward_model.inference(x_prior, sample=True, label=y_prior)[0]
                     if epoch == 0:
                         ps = self.noiser.trajectory_dsb(x_prior, x_data, sample=True, label=y_data)[0]
                     else:
                         ps = self.forward_model.inference(x_data, sample=True, label=y_data)[0] / 80.
-                    qs = self.backward_model.inference(x_prior, sample=True, label=y_prior)[0]
                 else:
                     qs = self.model.inference(x_prior, return_all=True)[1]
                     ps = self.noiser.trajectory(x_prior, x_data)
@@ -276,6 +285,7 @@ class Runner():
         torch.save(ckpt, os.path.join(self.save_path, 'ckpt', f'ep{epoch}_it{iters}.pth'))
 
     def load_ckpt(self):
+        '''
         def match_ckpt(ckpt):
             _ckpt = {}
             for k, v in ckpt.items():
@@ -285,30 +295,39 @@ class Runner():
                     k = k.replace('network.module.', 'network.')
                 _ckpt[k] = v
             return _ckpt
+        '''
         if self.args.ckpt is not None:
-            ckpt = torch.load(self.args.ckpt, map_location='cpu')
+            data = torch.load(self.args.ckpt, map_location='cpu')
             if self.dsb:
-                self.backward_model.load_state_dict(match_ckpt(ckpt['backward_model']), strict=False)
-                self.forward_model.load_state_dict(match_ckpt(ckpt['forward_model']), strict=False)
-                if "backward_optimizer" in ckpt:
-                    self.backward_optimizer.load_state_dict(ckpt['backward_optimizer'])
-                    self.forward_optimizer.load_state_dict(ckpt['forward_optimizer'])
+                #self.backward_model.load_state_dict(match_ckpt(data['backward_model']), strict=False)
+                #self.forward_model.load_state_dict(match_ckpt(data['forward_model']), strict=False)
+                copy_params_and_buffers(src_module=data['backward_model'], dst_module=self.backward_model, require_all=True)
+                copy_params_and_buffers(src_module=data['forward_model'], dst_module=self.forward_model, require_all=True)
+                if "backward_optimizer" in data:
+                    self.backward_optimizer.load_state_dict(data['backward_optimizer'])
+                    self.forward_optimizer.load_state_dict(data['forward_optimizer'])
             else:
-                self.model.load_state_dict(match_ckpt(ckpt['model']), strict=False)
-                if "optimizer" in ckpt:
-                    self.optimizer.load_state_dict(ckpt['optimizer'])
+                #self.model.load_state_dict(match_ckpt(ckpt['model']), strict=False)
+                copy_params_and_buffers(src_module=data['model'], dst_module=self.model, require_all=False)
+                if "optimizer" in data:
+                    self.optimizer.load_state_dict(data['optimizer'])
         else:
-            if self.args.backward_ckpt is not None and self.args.backward_ckpt.endswith('.pkl'):
-                with dnnlib.open_url(self.args.backward_ckpt, verbose=(self.rank == 0)) as f:
-                    data = pickle.load(f)
-                copy_params_and_buffers(src_module=data['ema'], dst_module=self.backward_model, require_all=False)
-            elif self.args.backward_ckpt is not None:
-                ckpt = torch.load(self.args.backward_ckpt, map_location='cpu')
-                self.backward_model.load_state_dict(match_ckpt(ckpt['model']), strict=False)
-            if self.args.forward_ckpt is not None and self.args.forward_ckpt.endswith('.pkl'):
-                with dnnlib.open_url(self.args.forward_ckpt, verbose=(self.rank == 0)) as f:
-                    data = pickle.load(f)
-                copy_params_and_buffers(src_module=data['ema'], dst_module=self.forward_model, require_all=False)
-            elif self.args.forward_ckpt is not None:
-                ckpt = torch.load(self.args.forward_ckpt, map_location='cpu')
-                self.forward_model.load_state_dict(match_ckpt(ckpt['model']), strict=False)
+            if self.args.backward_ckpt is not None:
+                if self.args.backward_ckpt.endswith('.pkl'):
+                    with dnnlib.open_url(self.args.backward_ckpt, verbose=(self.rank == 0)) as f:
+                        data = pickle.load(f)
+                    copy_params_and_buffers(src_module=data['ema'], dst_module=self.backward_model, require_all=False)
+                else:
+                    data = torch.load(self.args.backward_ckpt, map_location='cpu')
+                    #self.backward_model.load_state_dict(match_ckpt(ckpt['model']), strict=False)
+                    copy_params_and_buffers(src_module=data['backward_model'], dst_module=self.backward_model, require_all=True)
+
+            if self.args.forward_ckpt is not None:
+                if self.args.forward_ckpt.endswith('.pkl'):
+                    with dnnlib.open_url(self.args.forward_ckpt, verbose=(self.rank == 0)) as f:
+                        data = pickle.load(f)
+                    copy_params_and_buffers(src_module=data['ema'], dst_module=self.forward_model, require_all=False)
+                else:
+                    data = torch.load(self.args.forward_ckpt, map_location='cpu')
+                    # self.forward_model.load_state_dict(match_ckpt(data['model']), strict=False)
+                    copy_params_and_buffers(src_module=data['model'], dst_module=self.forward_model, require_all=True)

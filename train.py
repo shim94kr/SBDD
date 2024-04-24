@@ -25,8 +25,7 @@ def main(args):
 
     runner = Runner(args)
 
-    #runner.train()
-    runner.evaluate(epoch=1, iters=0)
+    runner.train()
 
     return
 
@@ -42,6 +41,7 @@ def create_parser():
     argparser.add_argument('--num_sample', type=int, default=128, help='number of samples')
     
     argparser.add_argument('--exp2d', action='store_true', help='set to true for 2d experiments')
+    argparser.add_argument('--cond', action='store_true', help='train class-conditional model')
     
     argparser.add_argument('--method', type=str, default='dsb', help='method')
     argparser.add_argument('--simplify', action='store_true', help='whether to use simplified DSB')
