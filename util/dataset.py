@@ -335,7 +335,6 @@ class DistilledDataset(BaseDataset):
         label_syn = self.label_syn.flatten(0,1)
         img, target = image_syn[idx % len(image_syn)], label_syn[idx % len(image_syn)]
         img = img + self.var * torch.randn(size=(self.channel, self.img_resolution, self.img_resolution), dtype=torch.float32)
-
         return img, target
     
 def create_data(name, gpus=1, dataset_size=2**24, batch_size=2**16, random_flip=False, device=None):

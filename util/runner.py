@@ -16,7 +16,7 @@ class Runner():
 
         self.device = torch.device(f'cuda')
 
-        base_steps_per_epoch = 2 ** 5 # 2**10
+        base_steps_per_epoch = 2**10
 
         self.prior_set, self.prior_sampler, self.prior_loader = create_data(
             self.args.prior, self.args.gpus, dataset_size=base_steps_per_epoch*self.args.batch_size, 
@@ -45,7 +45,7 @@ class Runner():
 
             self.noiser = create_noiser(self.args.noiser, args, self.device)
 
-            self.cache_size = self.cnt = self.args.batch_size * 40 # base_steps_per_epoch * self.args.batch_size * 4
+            self.cache_size = self.cnt = base_steps_per_epoch * self.args.batch_size# * 4
 
             self.backward_model = create_model(self.args.method, self.args, self.device, self.noiser, rank=self.rank, direction='b')
             self.forward_model = create_model(self.args.method, self.args, self.device, self.noiser, rank=self.rank, direction='f')
@@ -155,7 +155,7 @@ class Runner():
 
             if epoch > 0 and epoch % 2 == 0:
                 #self.noiser.gammas *= 0.5
-                self.noiser.S_noise *= 0.5
+                self.noiser.S_churn *= 0.5
 
             self.noiser.train()
             if self.dsb:
@@ -181,8 +181,8 @@ class Runner():
                     gt = model.target(x_0, x_1, x_t, t)
                 optimizer.zero_grad()
                 with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=self.args.use_amp):
-                    pred = model(x_t, t, y)
-                    raw_loss = self.criterion(pred, gt).mean(dim=-1)
+                    pred, weight = model(x_t, t, y, sb_training=True)
+                    raw_loss = (weight * self.criterion(pred, gt)).mean(dim=-1)
                     loss = raw_loss.mean()
                 ema_loss = loss.item() if ema_loss is None else (ema_loss * ema_loss_w(i) + loss.item() * (1 - ema_loss_w(i)))
                 self.scaler.scale(loss).backward()

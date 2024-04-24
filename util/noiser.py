@@ -175,30 +175,26 @@ class EDMNoiser(BaseNoiser):
         step_indices = torch.arange(self.num_timesteps, dtype=torch.float64, device=self.device)
         t_steps = (sigma_max ** (1 / rho) + step_indices / (self.num_timesteps - 1) * (sigma_min ** (1 / rho) - sigma_max ** (1 / rho))) ** rho
         self.t_steps = torch.cat([torch.as_tensor(t_steps), torch.zeros_like(t_steps[:1])]) # t_N = 0
+        #self.t_hats = torch.from_numpy(np.load('t_hats_tensor.npy')).to(device='cuda')
+        #self.st_noises = torch.from_numpy(np.load('st_noises_tensor.npy')).to(device='cuda')
 
-        self.S_churn, self.S_min, self.S_max, self.S_noise = 40, 0, float('inf'), 2
+        self.S_churn, self.S_min, self.S_max, self.S_noise = 30, 0, float('inf'), 1.007
     
-    def add_noise(self, x, t):
-        gamma = min(self.S_churn / self.num_timesteps, np.sqrt(2) - 1) if self.S_min <= t <= self.S_max else 0
+    def add_noise(self, x, t, i):
+        t = t.reshape(-1, 1, 1, 1)
+
+        cond = torch.logical_and(self.S_min <= t, t <= self.S_max)
+        var = min(self.S_churn / self.num_timesteps, np.sqrt(2) - 1)
+        gamma = torch.where(cond, torch.ones_like(t) * var, torch.zeros_like(t))
         t_hat = torch.as_tensor(t + gamma * t)
         x_hat = x + (t_hat ** 2 - t ** 2).sqrt() * self.S_noise * torch.randn_like(x)
         return x_hat, t_hat
 
     def coefficient(self, t):
-        tmax = t.max() if isinstance(t, torch.Tensor) else t
-        if tmax >= len(self.timestep_map):   
-            ret = {
-                'coef0': 0,
-                'coef1': 1,
-            }
-        else:
-            t = self.timestep_map[t].int()
-            ret = {
-                'coef0': self.t_steps[t],
-                'coef1': self.t_steps[self.num_timesteps - t],
-            }
-        ret = {k: v.float() if isinstance(v, torch.Tensor) else v for k, v in ret.items()}
-        return ret
+        last_idx = torch.ones_like(t) * len(self.timestep_map) - 1
+        t = torch.where(t >= len(self.timestep_map), last_idx, t)
+        t =  self.timestep_map[t].int()
+        return self.t_steps[t]
 
 class DSBNoiser(BaseNoiser):
     def __init__(self, *args, mean=0, std=1, **kwargs):

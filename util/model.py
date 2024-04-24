@@ -74,10 +74,9 @@ class BaseModel(torch.nn.Module):
     def target(self, x_0, x_1, x_t, t):
         raise NotImplementedError
 
-    def forward(self, x_t, t, label = None):
+    def forward(self, x_t, t, label = None, sb_training=False):
         if self.args.reparam == 'term-edm':
-            y = torch.eye(self.label_dim, device='cuda')[label]
-            x = self.network(x_t, t, y)
+            x = self._forward_edm(x_t, t, label, sb_training)
         else:
             t = self.noiser.timestep_map[t]
             x = self.network(x_t, t)
@@ -169,22 +168,40 @@ class DSB(BaseModel):
         coef_t_other = check_size(x, self.noiser.coefficient(t + delta))
         return coef_t, coef_t_other
 
+    def _forward_edm(self, x, t, label = None, sb_training=False):
+        y = torch.eye(self.label_dim, device='cuda')[label]
+        if self.direction == 'b':
+            t_cur, t_next = self.get_coef_ts(x, t, 1)
+        elif self.direction == 'f':
+            t_cur, t_next = self.get_coef_ts(x, self.num_timesteps - t, -1)
+        
+        if sb_training:
+            x, c_out = self.network(x, t_cur, y, sigma_next = t_next, sb_training = True)
+            weight = 1 / c_out.square()
+            return x, weight
+        else:
+            if self.direction == 'b':
+                x_hat, t_hat = self.noiser.add_noise(x, t_cur, t)
+            elif self.direction == 'f':
+                x_hat, t_hat = self.noiser.add_noise(x, t_cur, self.num_timesteps - t)
+            x_other, _ = self.network(x_hat, t_hat, y, sb_training = False)
+
+            d_cur = (x_hat - x_other) / t_hat
+            x = x_hat + (t_next - t_hat) * d_cur
+            return x
+
     def _forward(self, x, t, label=None):
         if self.args.reparam == 'term-edm':
-            t = t[0].item() # just select the first component of t
-            if self.direction == 'f' and t == 0:
-                x = x
-            else:
-                if self.direction == 'b':
-                    coef_t, coef_t_next = self.get_coef_ts(x, t, 1)
-                elif self.direction == 'f':
-                    coef_t, coef_t_next = self.get_coef_ts(x, self.num_timesteps - t, -1)
-                
-                x_hat, t_hat = self.noiser.add_noise(x, coef_t['coef0'])
-                x_other = self.forward(x_hat, t_hat, label)
+            cond = None
+            if self.direction == 'f':
+                t = t.reshape(-1, 1, 1, 1)
+                cond = (t == 0)
+                t = torch.where(cond, torch.ones_like(t), t)
 
-                d_cur = (x_hat - x_other) / coef_t['coef0']
-                x = x_hat + (coef_t_next['coef0'] - coef_t['coef0']) * d_cur
+            if cond is not None:
+                x = torch.where(cond, x, self._forward_edm(x, t, label, False))
+            else:
+                x = self._forward_edm(x, t, label, False)
         else:
             x_other = self.forward(x, t, label)
             if self.args.reparam == 'flow':
