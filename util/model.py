@@ -176,17 +176,18 @@ class DSB(BaseModel):
             t_cur, t_next = self.get_coef_ts(x, self.num_timesteps - t, -1)
         
         if sb_training:
-            x, c_out = self.network(x, t_cur, y, sigma_next = t_next, sb_training = True)
-            weight = 1 / c_out.square()
-            return x, weight
+            x = self.network(x, t_cur, y)
+            return x
         else:
             if self.direction == 'b':
-                x_hat, t_hat = self.noiser.add_noise(x, t_cur, t)
+                x_hat, t_hat = self.noiser.add_noise(x, t_cur)
+                dir = -1.
             elif self.direction == 'f':
-                x_hat, t_hat = self.noiser.add_noise(x, t_cur, self.num_timesteps - t)
-            x_other, _ = self.network(x_hat, t_hat, y, sb_training = False)
+                x_hat, t_hat = self.noiser.add_noise(x, t_cur)
+                dir = 1.
+            x_other = self.network(x_hat, t_hat, y)
 
-            d_cur = (x_hat - x_other) / t_hat
+            d_cur = dir * (x_hat - x_other) / t_hat
             x = x_hat + (t_next - t_hat) * d_cur
             return x
 
@@ -246,7 +247,7 @@ class DSB(BaseModel):
                 if self.args.simplify:
                     if self.args.reparam == 'flow':
                         gt_cache.append((x_raw - x) / (t + 1) * self.num_timesteps)
-                    elif self.args.reparam == 'term':
+                    elif self.args.reparam == 'term' or self.args.reparam == 'term-edm':
                         gt_cache.append(x_raw)
                     else:
                         gt_cache.append(x_old)

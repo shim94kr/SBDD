@@ -180,7 +180,7 @@ class EDMNoiser(BaseNoiser):
 
         self.S_churn, self.S_min, self.S_max, self.S_noise = 30, 0, float('inf'), 1.007
     
-    def add_noise(self, x, t, i):
+    def add_noise(self, x, t):
         t = t.reshape(-1, 1, 1, 1)
 
         cond = torch.logical_and(self.S_min <= t, t <= self.S_max)

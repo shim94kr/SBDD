@@ -155,7 +155,7 @@ class Runner():
 
             if epoch > 0 and epoch % 2 == 0:
                 #self.noiser.gammas *= 0.5
-                self.noiser.S_churn *= 0.5
+                self.noiser.S_churn *= 0.1
 
             self.noiser.train()
             if self.dsb:
@@ -181,8 +181,9 @@ class Runner():
                     gt = model.target(x_0, x_1, x_t, t)
                 optimizer.zero_grad()
                 with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=self.args.use_amp):
-                    pred, weight = model(x_t, t, y, sb_training=True)
-                    raw_loss = (weight * self.criterion(pred, gt)).mean(dim=-1)
+                    pred = model(x_t, t, y, sb_training=True)
+                    scale = 1. if self.direction == 'backward' else 80.
+                    raw_loss = self.criterion(pred / scale, gt / scale).mean(dim=-1)
                     loss = raw_loss.mean()
                 ema_loss = loss.item() if ema_loss is None else (ema_loss * ema_loss_w(i) + loss.item() * (1 - ema_loss_w(i)))
                 self.scaler.scale(loss).backward()
