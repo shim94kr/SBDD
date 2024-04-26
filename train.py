@@ -25,8 +25,7 @@ def main(args):
 
     runner = Runner(args)
 
-    #runner.train()
-    runner.evaluate(epoch=1, iters=1)
+    runner.train()
 
     return
 

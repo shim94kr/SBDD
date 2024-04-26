@@ -76,10 +76,7 @@ class BaseModel(torch.nn.Module):
 
     def forward(self, x_t, t, label = None, sb_training=False):
         if self.args.reparam == 'term-edm':
-            if self.direction == 'b':
-                x = self._forward_edm(x_t, t, label, sb_training)
-            else:
-                x = x_t - self._forward_edm(x_t, t, label, sb_training)
+            x = self._forward_edm(x_t, t, label, sb_training)
         else:
             t = self.noiser.timestep_map[t]
             x = self.network(x_t, t)
@@ -179,18 +176,24 @@ class DSB(BaseModel):
             t_cur, t_next = self.get_coef_ts(x, self.num_timesteps - t, -1)
         
         if sb_training:
-            x = self.network(x, t_cur, y)
+            if self.direction == 'b':
+                x = self.network(x, t_cur, y)
+            elif self.direction == 'f':
+                x = x - self.network(x, t_cur, y)
             return x
         else:
             if self.direction == 'b':
                 x_hat, t_hat = self.noiser.add_noise(x, t_cur)
-                dir = 1.
+                x_other = self.network(x_hat, t_hat, y)
             elif self.direction == 'f':
                 x_hat, t_hat = self.noiser.add_noise(x, t_cur)
-                dir = 1.
-            x_other = self.network(x_hat, t_hat, y)
-
-            d_cur = dir * (x_hat - x_other) / t_hat
+                x_other = x_hat - self.network(x_hat, t_hat, y)
+            
+            if self.direction == 'b':
+                d_cur = (x_hat - x_other) / t_hat
+            else:
+                d_cur = x_other / t_hat
+                
             x = x_hat + (t_next - t_hat) * d_cur
             return x
 

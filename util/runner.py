@@ -16,7 +16,7 @@ class Runner():
 
         self.device = torch.device(f'cuda')
 
-        base_steps_per_epoch = 2**10
+        base_steps_per_epoch = 2**5
 
         self.prior_set, self.prior_sampler, self.prior_loader = create_data(
             self.args.prior, self.args.gpus, dataset_size=base_steps_per_epoch*self.args.batch_size, 
@@ -45,7 +45,7 @@ class Runner():
 
             self.noiser = create_noiser(self.args.noiser, args, self.device)
 
-            self.cache_size = self.cnt = base_steps_per_epoch * self.args.batch_size# * 4
+            self.cache_size = self.cnt = base_steps_per_epoch * self.args.batch_size * 2
 
             self.backward_model = create_model(self.args.method, self.args, self.device, self.noiser, rank=self.rank, direction='b')
             self.forward_model = create_model(self.args.method, self.args, self.device, self.noiser, rank=self.rank, direction='f')
@@ -240,7 +240,7 @@ class Runner():
                     if epoch == 0:
                         ps = self.noiser.trajectory_dsb(x_prior, x_data, sample=True, label=y_data)[0]
                     else:
-                        ps = self.forward_model.inference(x_data, sample=True, label=y_data)[0] / 80.
+                        ps = self.forward_model.inference(x_data, sample=True, label=y_data)[0]
                 else:
                     qs = self.model.inference(x_prior, return_all=True)[1]
                     ps = self.noiser.trajectory(x_prior, x_data)
