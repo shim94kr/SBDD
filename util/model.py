@@ -76,7 +76,10 @@ class BaseModel(torch.nn.Module):
 
     def forward(self, x_t, t, label = None, sb_training=False):
         if self.args.reparam == 'term-edm':
-            x = self._forward_edm(x_t, t, label, sb_training)
+            if self.direction == 'b':
+                x = self._forward_edm(x_t, t, label, sb_training)
+            else:
+                x = x_t - self._forward_edm(x_t, t, label, sb_training)
         else:
             t = self.noiser.timestep_map[t]
             x = self.network(x_t, t)
@@ -181,7 +184,7 @@ class DSB(BaseModel):
         else:
             if self.direction == 'b':
                 x_hat, t_hat = self.noiser.add_noise(x, t_cur)
-                dir = -1.
+                dir = 1.
             elif self.direction == 'f':
                 x_hat, t_hat = self.noiser.add_noise(x, t_cur)
                 dir = 1.
